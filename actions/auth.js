@@ -2,6 +2,13 @@ var Q = require("q");
 var _ = require('underscore');
 var openid = require('openid');
 var GOOGLE_ENDPOINT = 'https://www.google.com/accounts/o8/id';
+var request = require('request');
+var open = require('open');
+var url = require('url');
+var querystring = require('querystring');
+var jwt = require('jsonwebtoken');
+var google = require('googleapis');
+
 var extensions = [new openid.AttributeExchange(
                   {
                     "http://axschema.org/contact/email": "required",
@@ -30,17 +37,16 @@ exports.action = {
     .done();
 
     function getGoogleAuthUrl() {
-      var deferred = Q.defer();
-
-      var relyingParty = new openid.RelyingParty(
-        api.configData.google.redirectUrl, // callback url
-        null, // realm (optional)
-        false, // stateless
-        false, // strict mode
-        extensions); // List of extensions to enable and include
+      var deferred = Q.defer();		
+      //var relyingParty = new openid.RelyingParty(
+     //api.configData.google.redirectUrl, // callback url
+     //null, // realm (optional)
+      //false, // stateless
+      //false, // strict mode
+      //extensions); // List of extensions to enable and include
       
-      relyingParty.authenticate(GOOGLE_ENDPOINT, false, deferred.makeNodeResolver());
-
+     //relyingParty.authenticate(GOOGLE_ENDPOINT, false, deferred.makeNodeResolver());		
+	open('https://accounts.google.com//o/oauth2/auth?response_type=code&client_id=129549620262-5boveov8v4quodro74fve6gtht49puvu.apps.googleusercontent.com&redirect_uri='+api.configData.google.redirectUrl+'&scope=openid%20email%20profile');	
       return deferred.promise;
     }
 
@@ -68,21 +74,47 @@ exports.googleAuthReturn = {
   description: "Return path for Google OAuth",
   inputs: {
     required: [],
-    optional: ["openid.mode", "openid.ext1.value.email", "openid.ext1.value.firstname", "openid.ext1.value.lastname"],
+    optional: [],
   },
   authenticated: false,
   outputExample: {},
   version: 1.0,
-  run: function(api, connection, next) {
+  run: function(api, connection, next) {	
+	var url_parts = url.parse(connection.rawConnection.req.url, true);
+	var query = url_parts.query;
+	var isAuthenticated = false;
+	var decoded = null;
+	var fullname = null;
+	var email = null;
+	
+	request.post({url:'https://www.googleapis.com/oauth2/v3/token', form: {code: query.code , client_id:'129549620262-5boveov8v4quodro74fve6gtht49puvu.apps.googleusercontent.com', client_secret:'PFMCq-bj0fJFFV6YcN1rW4po', redirect_uri:'http://localhost:5000/api/auth/google/return', grant_type:'authorization_code'}}, 
+	function(err,httpResponse,body){ 
 
-    if(connection.params["openid.mode"] !== "id_res") {
-      return handleError(new Error("Authentication Failed"));
+		var bodyParsed = JSON.parse(body);
+		decoded = JSON.parse(jwt.decode(bodyParsed.id_token));			
+		isAuthenticated = decoded.email_verified;
+		email = decoded.email;		
+		var plus = google.plus('v1');
+		var OAuth2 = google.auth.OAuth2;
+		var CLIENT_ID = '129549620262-5boveov8v4quodro74fve6gtht49puvu.apps.googleusercontent.com';
+		var CLIENT_SECRET = 'PFMCq-bj0fJFFV6YcN1rW4po';
+		var REDIRECT_URL = 'http://localhost:5000/api/auth/google/return';
+		var oauth2Client = new OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URL);
+		oauth2Client.setCredentials({
+			access_token : bodyParsed.access_token			
+		});	
+		plus.people.get({ userId: decoded.sub, auth: oauth2Client }, function(err, response) {
+				// handle err and response
+				if (err) {
+					console.log('An error occured', err);
+					return;
+				}
+				//var profile = JSON.parse(response.name);			
+				fullname = response.displayName;				
+    if(isAuthenticated != true) {
+     return handleError(new Error("Authenticationddddddddd Failed"));
     }
-
-    var email = connection.params["openid.ext1.value.email"];
-    var fullname = connection.params["openid.ext1.value.firstname"] + " " + connection.params["openid.ext1.value.lastname"];
-
-    // flows
+				 // flows
     // 1. find a user by email
     // 2. creates a user if not exist
     // 3. sets apikey and add user to session.
@@ -94,6 +126,12 @@ exports.googleAuthReturn = {
     .then(handleSuccess)
     .fail(handleError)
     .done();
+				
+		});		
+	});
+	    //var fullname = connection.params["openid.ext1.value.firstname"] + " " + connection.params["openid.ext1.value.lastname"];
+	 
+   
 
     function createUserIfNotExist(user) {
       return user || api.users.create({email: email, name: fullname});
